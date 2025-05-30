@@ -6,9 +6,9 @@ export const sdkInit = (envVars: Record<string, string>): Record<string, Functio
         throw new Error('BRAVE_API_KEY is required but not provided in the environment variables.');
     }
 
-    // Initialize SDK
+    // Initialize SDK with api key
     const sdk = createBraveSDK({
-        apiKey: envVars['BRAVE_API_KEY'],
+        apiKey: envVars['BRAVE_API_KEY']
     });
 
     // Map functions
@@ -22,7 +22,7 @@ export const sdkInit = (envVars: Record<string, string>): Record<string, Functio
         videoSearch: sdk.videoSearch.bind(sdk),
         newsSearch: sdk.newsSearch.bind(sdk),
         suggestSearch: sdk.suggestSearch.bind(sdk),
-        spellcheckSearch: sdk.spellcheckSearch.bind(sdk),
+        spellcheckSearch: sdk.spellcheckSearch.bind(sdk)
     };
 
     return sdkMap;

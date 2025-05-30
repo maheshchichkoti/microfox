@@ -16,11 +16,10 @@ jobs:
       with:
         fetch-depth: 0  # Fetch full history for proper diff
 
-    - name: Setup Node.js
+    - name: Use Node.js 23.x
       uses: actions/setup-node@v4
       with:
-        node-version: '18'
-        cache: 'npm'
+        node-version: '23'
 
     - name: Install dependencies
       run: |
@@ -141,8 +140,10 @@ jobs:
       if: steps.detect-changes.outputs.has_changes == 'true'
       id: check-sls-changes
       run: |
-        # Check if any SLS files were modified
-        if git diff --quiet; then
+        # Check if any SLS files were modified (exclude tracking files)
+        SLS_CHANGES=$(git diff --name-only | grep -E '^packages/.*/sls/' || true)
+        
+        if [ -z "$SLS_CHANGES" ]; then
           echo "No SLS files were modified"
           echo "has_sls_changes=false" >> $GITHUB_OUTPUT
         else
@@ -150,8 +151,11 @@ jobs:
           echo "has_sls_changes=true" >> $GITHUB_OUTPUT
           
           # Show what changed
-          echo "Modified files:"
-          git diff --name-only
+          echo "Modified SLS files:"
+          echo "$SLS_CHANGES"
+          
+          # Store the SLS files for commit
+          echo "$SLS_CHANGES" > /tmp/sls_files_to_commit.txt
         fi
 
     - name: Commit and push SLS changes
@@ -160,10 +164,25 @@ jobs:
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
         
-        git add .
+        # Stash all changes (including SLS files)
+        git stash push -m "SLS auto-update changes"
+        
+        # Clean any remaining unstaged changes
+        git clean -fd
+        git checkout -- .
+        
+        # Pull latest changes
+        git pull origin $(git branch --show-current)
+        
+        # Unstash the SLS changes
+        git stash pop
+        
+        # Add only SLS files and commit
+        git add 'packages/*/sls/*'
         git commit -m "🤖 Auto-update SLS files for documentation changes"
         
-        git push
+        # Push to current branch
+        git push origin $(git branch --show-current)
 
     - name: Summary
       if: steps.detect-changes.outputs.has_changes == 'true'

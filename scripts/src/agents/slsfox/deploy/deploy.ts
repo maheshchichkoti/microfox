@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { STAGE } from './constants';
 import { createClient } from '@supabase/supabase-js';
-import { embed } from '../../embeddings/geminiEmbed';
+import { embed } from '../../../embeddings/geminiEmbed';
 import { OpenAPIDoc } from './types';
 
 interface FunctionMetadata {
@@ -23,6 +23,80 @@ interface FunctionMetadata {
       output: string;
     };
   };
+}
+
+/**
+ * Convert a JSON schema object to formatted markdown
+ * @param {any} schema - JSON schema object
+ * @param {number} indent - Indentation level
+ * @returns {string} - Formatted markdown string
+ */
+function formatSchemaToMarkdown(schema: any, indent: number = 0): string {
+  if (!schema || typeof schema !== 'object') {
+    return String(schema || 'N/A');
+  }
+
+  const spaces = '  '.repeat(indent);
+  let result = '';
+
+  if (schema.type === 'object' && schema.properties) {
+    result += `${spaces}**Object:**\n`;
+    if (schema.description) {
+      result += `${spaces}- Description: ${schema.description}\n`;
+    }
+
+    for (const [propName, propSchema] of Object.entries(schema.properties)) {
+      const isRequired = schema.required?.includes(propName) ? ' *(required)*' : ' *(optional)*';
+      result += `${spaces}- \`${propName}\`${isRequired}:\n`;
+
+      if (typeof propSchema === 'object' && propSchema !== null) {
+        const prop = propSchema as any;
+        if (prop.description) {
+          result += `${spaces}  - ${prop.description}\n`;
+        }
+        if (prop.type) {
+          result += `${spaces}  - Type: \`${prop.type}\`\n`;
+        }
+        if (prop.format) {
+          result += `${spaces}  - Format: \`${prop.format}\`\n`;
+        }
+        if (prop.enum) {
+          result += `${spaces}  - Enum: ${prop.enum.map((e: any) => `\`${e}\``).join(', ')}\n`;
+        }
+
+        // Handle nested objects and arrays
+        if (prop.type === 'object' && prop.properties) {
+          result += formatSchemaToMarkdown(prop, indent + 2);
+        } else if (prop.type === 'array' && prop.items) {
+          result += `${spaces}  - Array items:\n`;
+          result += formatSchemaToMarkdown(prop.items, indent + 3);
+        }
+      }
+    }
+  } else if (schema.type === 'array' && schema.items) {
+    result += `${spaces}**Array:**\n`;
+    if (schema.description) {
+      result += `${spaces}- Description: ${schema.description}\n`;
+    }
+    result += `${spaces}- Items:\n`;
+    result += formatSchemaToMarkdown(schema.items, indent + 1);
+  } else {
+    // Simple type
+    if (schema.type) {
+      result += `${spaces}- Type: \`${schema.type}\`\n`;
+    }
+    if (schema.description) {
+      result += `${spaces}- Description: ${schema.description}\n`;
+    }
+    if (schema.format) {
+      result += `${spaces}- Format: \`${schema.format}\`\n`;
+    }
+    if (schema.enum) {
+      result += `${spaces}- Enum: ${schema.enum.map((e: any) => `\`${e}\``).join(', ')}\n`;
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -70,7 +144,7 @@ async function deployPackageSls(packagePath: string): Promise<boolean> {
 
     // Deploy using serverless framework
     console.log('Deploying with serverless framework...');
-    const deployCommand = `npx serverless deploy --stage ${STAGE}`;
+    const deployCommand = `npx serverless deploy --stage ${STAGE} --force`;
     console.log('Running command:', deployCommand);
 
     const output = execSync(deployCommand, { encoding: 'utf8' });
@@ -144,15 +218,20 @@ async function deployPackageSls(packagePath: string): Promise<boolean> {
             docText += `  Instructions: ${op.instructions}\n`;
 
             if (op.requestBody?.content?.['application/json']?.schema) {
-              const schema = JSON.stringify(op.requestBody.content['application/json'].schema);
-              docText += `\nREQUEST_SCHEMA: ${schema}\n`;
+              const schema = op.requestBody.content['application/json'].schema;
+              docText += `\n**REQUEST SCHEMA:**\n`;
+              docText += formatSchemaToMarkdown(schema);
             }
 
-            docText += `\nRESPONSES:\n`;
+            docText += `\n**RESPONSES:**\n`;
             for (const [status, resp] of Object.entries(op.responses)) {
               if (resp?.content?.['application/json']?.schema) {
-                const schema = JSON.stringify(resp.content['application/json'].schema);
-                docText += `  ${status} → ${schema}\n`;
+                const schema = resp.content['application/json'].schema;
+                docText += `\n**${status} Response:**\n`;
+                if (resp.description) {
+                  docText += `- Description: ${resp.description}\n`;
+                }
+                docText += formatSchemaToMarkdown(schema);
               }
             }
 
@@ -194,6 +273,7 @@ async function deployPackageSls(packagePath: string): Promise<boolean> {
             const metadata = {
               openApiSchema: docsData,
               endpointSchema: op,
+              package_name: packageName,
               function_type: "lambda",
             };
 
@@ -245,12 +325,25 @@ async function deployPackageSls(packagePath: string): Promise<boolean> {
                 results.success++;
               }
             }
-            return true;
+            console.log('results after', method, path, results);
           } catch (error) {
-            console.error(`Error deploying sls function for package ${packageName}:`, error);
-            return false;
+            console.error(`Error processing endpoint ${method.toUpperCase()} ${path}:`, error);
+            console.log('results after', method, path, results);
+            results.failed++;
+            results.errors.push({ path, method, error });
           }
         }
+        console.log('results after', path, results);
+      }
+      console.log('results', results);
+      
+      // Return based on overall results
+      if (results.failed > 0) {
+        console.log(`Deployment completed with errors: ${results.success} succeeded, ${results.failed} failed`);
+        return false;
+      } else {
+        console.log(`All endpoints processed successfully: ${results.success} succeeded`);
+        return true;
       }
     }
     return true;
